@@ -72,8 +72,9 @@ function makeCloudMaterial(
       uSunDir: uniforms.uSunDir,
       ...paletteUniforms(uniforms),
       uThreshold: { value: threshold },
-      uRange: { value: 0.17 },
-      uOpacity: { value: 13.0 },
+      uRange: { value: 0.22 },
+      uOpacity: { value: 16.0 },
+      uLife: { value: 1.0 },
     },
     transparent: true,
     side: BackSide,
@@ -114,6 +115,7 @@ function makeCloudMaterial(
       uniform float uThreshold;
       uniform float uRange;
       uniform float uOpacity;
+      uniform float uLife;
       uniform mat4 modelMatrix;
       uniform vec3 uSunDir;
 
@@ -137,8 +139,11 @@ function makeCloudMaterial(
         // Erode the fringe with finer noise: feathery, smoky edges
         // around a dense core.
         float wisp = texture(uMap, p * 2.7 + 0.5).r;
-        raw -= wisp * 0.35 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
-        return smoothstep(uThreshold, uThreshold + uRange, raw);
+        raw -= wisp * 0.25 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
+        // Life cycle: a rising threshold dissolves the cloud from its
+        // wisps inward; a falling one condenses it out of thin air.
+        float th = uThreshold + (1.0 - uLife) * 0.32;
+        return smoothstep(th, th + uRange, raw);
       }
 
       void main() {
@@ -147,7 +152,7 @@ function makeCloudMaterial(
         if (bounds.x > bounds.y) discard;
         bounds.x = max(bounds.x, 0.0);
 
-        const int STEPS = 36;
+        const int STEPS = 48;
         float stepSize = (bounds.y - bounds.x) / float(STEPS);
         vec3 p = vOrigin + bounds.x * rayDir;
 
@@ -209,10 +214,28 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
   interface Drift {
     pivot: Object3D;
     mesh: Mesh;
+    material: ShaderMaterial;
     speed: number;
     spin: number;
+    lifetime: number;
+    birth: number;
   }
   const drifts: Drift[] = [];
+
+  function placeCloud(mesh: Mesh) {
+    mesh.scale.set(
+      randRange(rng, 1.4, 3.2),
+      randRange(rng, 0.8, 1.4),
+      randRange(rng, 1.0, 2.2),
+    );
+    const lat = randRange(rng, -1.15, 1.15);
+    const radius = PLANET_RADIUS * randRange(rng, 1.34, 1.6);
+    mesh.position.set(Math.cos(lat) * radius, Math.sin(lat) * radius, 0);
+    mesh.rotation.set(0, 0, 0);
+    mesh.lookAt(0, 0, 0);
+    mesh.rotateX(-Math.PI / 2);
+    mesh.rotateY(rng() * Math.PI * 2);
+  }
 
   for (let i = 0; i < count; i++) {
     const material = makeCloudMaterial(
@@ -221,22 +244,7 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
       randRange(rng, 0.29, 0.38),
     );
     const mesh = new Mesh(geometry, material);
-
-    // A puffy, wide box; base slightly flattened by the falloff itself.
-    mesh.scale.set(
-      randRange(rng, 1.2, 3.1),
-      randRange(rng, 0.5, 1.0),
-      randRange(rng, 0.9, 2.1),
-    );
-
-    const lat = randRange(rng, -1.15, 1.15);
-    const radius = PLANET_RADIUS * randRange(rng, 1.32, 1.55);
-    mesh.position.set(Math.cos(lat) * radius, Math.sin(lat) * radius, 0);
-
-    // Keep the flat-ish side roughly parallel to the ground below.
-    mesh.lookAt(0, 0, 0);
-    mesh.rotateX(-Math.PI / 2);
-    mesh.rotateY(rng() * Math.PI * 2);
+    placeCloud(mesh);
 
     const pivot = new Object3D();
     pivot.rotation.y = rng() * Math.PI * 2;
@@ -246,18 +254,37 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
     drifts.push({
       pivot,
       mesh,
+      material,
       speed: randRange(rng, 0.018, 0.055) * (rng() > 0.65 ? -1 : 1),
       spin: randRange(rng, -0.025, 0.025),
+      lifetime: randRange(rng, 60, 140),
+      // Stagger births so the sky starts partly formed.
+      birth: -randRange(rng, 0, 140),
     });
   }
 
   return {
     group,
-    update(dt: number) {
+    update(dt: number, elapsed: number) {
       for (const d of drifts) {
         // Wind: drift around the planet, tumble slowly so shapes evolve.
         d.pivot.rotation.y += d.speed * dt;
         d.mesh.rotateY(d.spin * dt);
+
+        // Life cycle: condense, live, dissolve, respawn somewhere new.
+        const age = elapsed - d.birth;
+        if (age > d.lifetime) {
+          d.birth = elapsed;
+          d.lifetime = randRange(rng, 60, 140);
+          d.speed = randRange(rng, 0.018, 0.055) * (rng() > 0.65 ? -1 : 1);
+          placeCloud(d.mesh);
+          d.pivot.rotation.y = rng() * Math.PI * 2;
+        }
+        const t = Math.max(0, age) / d.lifetime;
+        const env =
+          Math.min(1, t / 0.18) * (1 - Math.max(0, (t - 0.78) / 0.22));
+        d.material.uniforms.uLife.value = env;
+        d.mesh.visible = env > 0.015;
       }
     },
   };

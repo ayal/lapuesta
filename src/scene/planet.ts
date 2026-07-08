@@ -58,15 +58,20 @@ export function heightAt(dir: Vector3): number {
   const w =
     fbm(dir.x * 1.9 + 9.2, dir.y * 1.9 + 9.2, dir.z * 1.9 + 9.2, 3) * 0.35;
 
-  const c = fbm(dir.x * 1.6 + w, dir.y * 1.6 + w, dir.z * 1.6 + w, 3);
+  // Smooth continents: only two octaves, the warp supplies coast detail.
+  const c = fbm(dir.x * 1.6 + w, dir.y * 1.6 + w, dir.z * 1.6 + w, 2);
   let h = c * 0.38 - 0.02;
 
-  // Mountain ranges live only in some regions of the continents;
-  // elsewhere the land stays as rolling plains.
   const land = Math.min(1, Math.max(0, (c - 0.03) / 0.19));
+
+  // Gentle rolling hills on the plains.
+  h += fbm(dir.x * 3.2 + 17.3, dir.y * 3.2 + 17.3, dir.z * 3.2 + 17.3, 2) *
+    0.05 * land;
+
+  // Broad mountain ranges in some regions of the continents only.
   const mm = fbm(dir.x * 1.2 + 31.7, dir.y * 1.2 + 31.7, dir.z * 1.2 + 31.7, 2);
   const ranges = Math.min(1, Math.max(0, (mm - 0.05) / 0.4));
-  const r = ridged(dir.x * 2.4, dir.y * 2.4, dir.z * 2.4, 2);
+  const r = ridged(dir.x * 2.2, dir.y * 2.2, dir.z * 2.2, 2);
   h += Math.pow(r, 1.8) * ranges * land * 0.65;
 
   return h * 0.14;
@@ -176,9 +181,7 @@ export function createPlanet(uniforms: SceneUniforms): Mesh {
       // High-frequency height detail, re-evaluated per fragment for bump
       // shading far beyond the mesh resolution (dgreenheck's technique).
       float detailHeight(vec3 p, float rockiness) {
-        float h = snoise(p * 16.0) * 0.6 + snoise(p * 42.0) * 0.3;
-        h += snoise(p * 100.0) * 0.10 * rockiness;
-        return h;
+        return snoise(p * 12.0) * 0.65 + snoise(p * 30.0) * 0.35 * rockiness;
       }
 
       void main() {
@@ -203,7 +206,7 @@ export function createPlanet(uniforms: SceneUniforms): Mesh {
         vec3 T = normalize(cross(N0, abs(N0.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
         vec3 B = normalize(cross(N0, T));
         float e = 0.012;
-        float amp = mix(0.03, 0.12, rockiness) * (1.0 - underwater * 0.7);
+        float amp = mix(0.02, 0.07, rockiness) * (1.0 - underwater * 0.7);
         float h0 = detailHeight(vDir, rockiness);
         float hx = detailHeight(vDir + T * e, rockiness);
         float hy = detailHeight(vDir + B * e, rockiness);

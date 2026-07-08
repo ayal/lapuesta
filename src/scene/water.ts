@@ -60,18 +60,31 @@ export function createWater(uniforms: SceneUniforms): Mesh {
       ${NOISE_GLSL}
       ${LIGHT_GLSL}
 
+      vec3 rotateY(vec3 p, float a) {
+        float c = cos(a);
+        float s = sin(a);
+        return vec3(c * p.x + s * p.z, p.y, c * p.z - s * p.x);
+      }
+
       void main() {
         vec3 L = normalize(uSunDir);
         vec3 V = normalize(cameraPosition - vWorldPos);
 
-        // Rippled normal.
+        // The whole sea streams slowly around the planet, with faster
+        // ripples riding on a broad swell.
         float t = uTime;
+        vec3 pd = rotateY(vDir, t * 0.014);
         vec3 ripple = vec3(
-          snoise(vDir * 34.0 + vec3(t * 0.045, 0.0, t * 0.03)),
-          snoise(vDir * 34.0 + vec3(7.3, t * 0.05, -t * 0.04)),
-          snoise(vDir * 34.0 + vec3(-t * 0.035, 3.1, t * 0.055))
+          snoise(pd * 34.0 + vec3(t * 0.09, 0.0, t * 0.06)),
+          snoise(pd * 34.0 + vec3(7.3, t * 0.10, -t * 0.08)),
+          snoise(pd * 34.0 + vec3(-t * 0.07, 3.1, t * 0.11))
         );
-        vec3 N = normalize(normalize(vWorldNormal) + ripple * 0.055);
+        vec3 swell = vec3(
+          snoise(pd * 7.0 + vec3(t * 0.05, 1.7, 0.0)),
+          snoise(pd * 7.0 + vec3(0.0, t * 0.04, 9.4)),
+          snoise(pd * 7.0 + vec3(4.2, 0.0, t * 0.06))
+        );
+        vec3 N = normalize(normalize(vWorldNormal) + ripple * 0.06 + swell * 0.035);
 
         float ndl = dot(normalize(vWorldNormal), L);
         float band = exp(-pow(ndl / 0.16, 2.0));
@@ -102,7 +115,7 @@ export function createWater(uniforms: SceneUniforms): Mesh {
 
         // Foam along the shoreline, broken up and slowly seething.
         float foamZone = smoothstep(-0.007, -0.0006, vShore);
-        float seethe = snoise(vDir * 95.0 + vec3(0.0, t * 0.12, 0.0));
+        float seethe = snoise(pd * 95.0 + vec3(0.0, t * 0.3, 0.0));
         float foam = foamZone * smoothstep(0.15, 0.75, 0.5 + 0.5 * seethe + foamZone * 0.35);
         col = mix(col, vec3(0.75, 0.78, 0.80) * (0.25 + dayness), foam * 0.85 * (0.15 + 0.85 * dayness));
 

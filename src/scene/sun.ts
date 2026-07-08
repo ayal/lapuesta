@@ -16,7 +16,7 @@ import { mulberry32 } from "../utils";
 export const SUN_DISTANCE = 9.5;
 export const SUN_RADIUS = 0.55;
 /** Seconds for one full day/night lap around the planet. */
-export const DAY_LENGTH = 110;
+export const DAY_LENGTH = 80;
 
 function makeGlowTexture(): CanvasTexture {
   const size = 256;
@@ -71,9 +71,12 @@ export function createSun(): Sun {
   const pos = new Vector3();
   let currentDay = -1;
 
+  const precess = new Quaternion();
+  const Y_AXIS = new Vector3(0, 1, 0);
+
   function pickOrbit(day: number, q: Quaternion) {
     const rng = mulberry32(day * 5077 + 3);
-    const tilt = (rng() * 2 - 1) * 0.6; // up to ~±34 degrees
+    const tilt = (rng() * 2 - 1) * 0.95; // up to ~±54 degrees
     const yaw = rng() * Math.PI * 2;
     euler.set(tilt * Math.cos(yaw), 0, tilt * Math.sin(yaw));
     q.setFromEuler(euler);
@@ -89,7 +92,13 @@ export function createSun(): Sun {
         pickOrbit(day, targetOrbit);
         if (firstCall) orbit.copy(targetOrbit);
       }
-      orbit.slerp(targetOrbit, 1 - Math.exp(-dt * 0.15));
+      orbit.slerp(targetOrbit, 1 - Math.exp(-dt * 0.5));
+
+      // The orbit plane also precesses continuously, so within a single
+      // day the sun's path visibly wanders around the planet.
+      precess.setFromAxisAngle(Y_AXIS, dt * 0.05);
+      orbit.premultiply(precess);
+      targetOrbit.premultiply(precess);
 
       const angle = elapsed * ((Math.PI * 2) / DAY_LENGTH);
       pos

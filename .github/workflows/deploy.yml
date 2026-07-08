@@ -23,9 +23,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # npm occasionally dies with "Exit handler never called!" yet exits 0,
-      # leaving node_modules empty — retry and verify the install landed.
-      - run: npm ci --no-audit --no-fund || npm ci --no-audit --no-fund
+      # npm ci reproducibly dies with "Exit handler never called!" on the
+      # hosted runners — npm install survives; verify the install landed.
+      - run: npm install --no-audit --no-fund || npm install --no-audit --no-fund
       - run: test -d node_modules/three
       - run: npm run build
       - uses: actions/configure-pages@v4

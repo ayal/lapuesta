@@ -21,9 +21,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-      - run: npm ci
+      # npm occasionally dies with "Exit handler never called!" yet exits 0,
+      # leaving node_modules empty — retry and verify the install landed.
+      - run: npm ci --no-audit --no-fund || npm ci --no-audit --no-fund
+      - run: test -d node_modules/three
       - run: npm run build
       - uses: actions/configure-pages@v4
         with:

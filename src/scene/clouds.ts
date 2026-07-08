@@ -70,7 +70,7 @@ function makeCloudTexture(seed: number): Data3DTexture {
           perlin.noise(x * s + seed, y * s * 1.3, z * s) +
           0.5 * perlin.noise(x * s * 2.3, y * s * 2.3 + seed, z * s * 2.3) +
           0.25 * perlin.noise(x * s * 4.8 + seed, y * s * 4.8, z * s * 4.8);
-        density *= 0.72 + 0.5 * n;
+        density *= 0.6 + 0.65 * n;
         if (py < -0.45) density *= Math.max(0, 1 - (-0.45 - py) * 2.4);
 
         data[i] = Math.min(255, Math.max(0, density * 285));
@@ -101,8 +101,8 @@ function makeCloudMaterial(
       uTime: uniforms.uTime,
       ...paletteUniforms(uniforms),
       uThreshold: { value: threshold },
-      uRange: { value: 0.2 },
-      uOpacity: { value: 22.0 },
+      uRange: { value: 0.45 },
+      uOpacity: { value: 13.0 },
       uLife: { value: 1.0 },
     },
     transparent: true,
@@ -166,14 +166,18 @@ function makeCloudMaterial(
 
       float sampleDensity(vec3 p) {
         float raw = texture(uMap, p + 0.5).r;
-        // Erode the fringe with finer noise that slowly drifts, so the
-        // feathery edges seethe and morph continuously.
+        // Two layers of drifting fine noise tear the fringe into wisps
+        // that seethe and morph continuously.
+        float edge = 1.0 - smoothstep(uThreshold, uThreshold + 0.3, raw);
         float wisp = texture(uMap, p * 3.3 + 0.5 + uTime * 0.006).r;
-        raw -= wisp * 0.13 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
+        float wisp2 = texture(uMap, p * 6.1 + 0.5 - uTime * 0.004).r;
+        raw -= (wisp * 0.18 + wisp2 * 0.12) * edge;
         // Life cycle: mostly a gentle density fade with a slight
         // threshold drift, so forming/dissolving is soft, not choppy.
         float th = uThreshold + (1.0 - uLife) * 0.10;
         float env = uLife * uLife * (3.0 - 2.0 * uLife);
+        // The long ramp leaves a misty translucent halo around the
+        // dense core instead of a hard boundary.
         return smoothstep(th, th + uRange, raw) * env;
       }
 
@@ -202,8 +206,8 @@ function makeCloudMaterial(
             // Beer-Lambert extinction sculpts the lobes; the powder term
             // darkens the crevices between them, which is what makes
             // cumulus read as fluffy cauliflower.
-            float beer = exp(-sh * 4.2);
-            float powder = 1.0 - exp(-(sh + d) * 2.6);
+            float beer = exp(-sh * 3.6);
+            float powder = 1.0 - exp(-(sh + d) * 2.0);
 
             // Sun angle at this exact sample, so one cloud can run from
             // fire-lit to dusk-grey across its own length.
@@ -278,7 +282,7 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
     const material = makeCloudMaterial(
       uniforms,
       textures[i % textures.length],
-      randRange(rng, 0.29, 0.38),
+      randRange(rng, 0.24, 0.33),
     );
     const mesh = new Mesh(geometry, material);
     placeCloud(mesh);

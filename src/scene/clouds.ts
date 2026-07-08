@@ -8,6 +8,7 @@ import {
   Mesh,
   Object3D,
   RedFormat,
+  RepeatWrapping,
   ShaderMaterial,
 } from "three";
 import { ImprovedNoise } from "three/addons/math/ImprovedNoise.js";
@@ -83,6 +84,87 @@ function makeCloudTexture(seed: number): Data3DTexture {
   texture.format = RedFormat;
   texture.minFilter = LinearFilter;
   texture.magFilter = LinearFilter;
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.wrapR = RepeatWrapping;
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * Tiling inverted-worley fbm — the Decima/Horizon Zero Dawn detail
+ * texture. Sampled with curl distortion, it erodes cloud edges into
+ * wispy tendrils at the base and billows at the top.
+ */
+function makeDetailTexture(): Data3DTexture {
+  const size = 40;
+  const data = new Uint8Array(size * size * size);
+  const rngW = mulberry32(4242);
+
+  function worleyLayer(cells: number): Float32Array {
+    const pts: number[][][][] = [];
+    for (let cx = 0; cx < cells; cx++) {
+      pts.push([]);
+      for (let cy = 0; cy < cells; cy++) {
+        pts[cx].push([]);
+        for (let cz = 0; cz < cells; cz++) {
+          pts[cx][cy].push([rngW(), rngW(), rngW()]);
+        }
+      }
+    }
+    const out = new Float32Array(size * size * size);
+    const cs = size / cells;
+    let i = 0;
+    for (let z = 0; z < size; z++) {
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const fx = x / cs;
+          const fy = y / cs;
+          const fz = z / cs;
+          const ix = Math.floor(fx);
+          const iy = Math.floor(fy);
+          const iz = Math.floor(fz);
+          let min = 1e9;
+          for (let ox = -1; ox <= 1; ox++) {
+            for (let oy = -1; oy <= 1; oy++) {
+              for (let oz = -1; oz <= 1; oz++) {
+                const wx = (ix + ox + cells) % cells;
+                const wy = (iy + oy + cells) % cells;
+                const wz = (iz + oz + cells) % cells;
+                const p = pts[wx][wy][wz];
+                const dx = fx - (ix + ox + p[0]);
+                const dy = fy - (iy + oy + p[1]);
+                const dz = fz - (iz + oz + p[2]);
+                const d = dx * dx + dy * dy + dz * dz;
+                if (d < min) min = d;
+              }
+            }
+          }
+          out[i++] = Math.max(0, 1 - Math.sqrt(min));
+        }
+      }
+    }
+    return out;
+  }
+
+  const w1 = worleyLayer(3);
+  const w2 = worleyLayer(6);
+  const w3 = worleyLayer(12);
+  for (let i = 0; i < data.length; i++) {
+    data[i] = Math.min(
+      255,
+      Math.max(0, (w1[i] * 0.625 + w2[i] * 0.25 + w3[i] * 0.125) * 300),
+    );
+  }
+
+  const texture = new Data3DTexture(data, size, size, size);
+  texture.format = RedFormat;
+  texture.minFilter = LinearFilter;
+  texture.magFilter = LinearFilter;
+  texture.wrapS = RepeatWrapping;
+  texture.wrapT = RepeatWrapping;
+  texture.wrapR = RepeatWrapping;
   texture.unpackAlignment = 1;
   texture.needsUpdate = true;
   return texture;
@@ -91,12 +173,14 @@ function makeCloudTexture(seed: number): Data3DTexture {
 function makeCloudMaterial(
   uniforms: SceneUniforms,
   texture: Data3DTexture,
+  detail: Data3DTexture,
   threshold: number,
 ): ShaderMaterial {
   return new ShaderMaterial({
     glslVersion: GLSL3,
     uniforms: {
       uMap: { value: texture },
+      uDetail: { value: detail },
       uSunDir: uniforms.uSunDir,
       uTime: uniforms.uTime,
       ...paletteUniforms(uniforms),
@@ -141,6 +225,7 @@ function makeCloudMaterial(
       out vec4 outColor;
 
       uniform sampler3D uMap;
+      uniform sampler3D uDetail;
       uniform float uThreshold;
       uniform float uRange;
       uniform float uOpacity;
@@ -164,21 +249,48 @@ function makeCloudMaterial(
         return vec2(t0, t1);
       }
 
+      float lifeEnv() {
+        return uLife * uLife * (3.0 - 2.0 * uLife);
+      }
+
+      // Cheap density (no detail erosion) for shadow taps.
+      float sampleDensityCheap(vec3 p) {
+        float raw = texture(uMap, p + 0.5).r;
+        float th = uThreshold + (1.0 - uLife) * 0.10;
+        return smoothstep(th, th + uRange, raw) * lifeEnv();
+      }
+
+      float remapClamped(float x, float a, float b, float c, float d) {
+        return clamp(c + (x - a) / (b - a) * (d - c), c, d);
+      }
+
+      // Full density: base lobes eroded by curl-distorted worley detail,
+      // the Decima/Horizon Zero Dawn recipe. Bottoms tear into wisps,
+      // tops stay billowy.
       float sampleDensity(vec3 p) {
         float raw = texture(uMap, p + 0.5).r;
-        // Two layers of drifting fine noise tear the fringe into wisps
-        // that seethe and morph continuously.
-        float edge = 1.0 - smoothstep(uThreshold, uThreshold + 0.3, raw);
-        float wisp = texture(uMap, p * 3.3 + 0.5 + uTime * 0.006).r;
-        float wisp2 = texture(uMap, p * 6.1 + 0.5 - uTime * 0.004).r;
-        raw -= (wisp * 0.18 + wisp2 * 0.12) * edge;
-        // Life cycle: mostly a gentle density fade with a slight
-        // threshold drift, so forming/dissolving is soft, not choppy.
+        if (raw < 0.01) return 0.0;
+
+        float hf = clamp(p.y + 0.5, 0.0, 1.0); // height inside the box
+
+        // Curl-ish domain distortion, strongest near the base, slowly
+        // swirling — smoke, not static fuzz.
+        vec3 q = p * 1.6;
+        vec2 curl = vec2(
+          texture(uDetail, q * 0.5 + uTime * 0.006).r,
+          texture(uDetail, q * 0.5 + vec3(0.37, 0.11, 0.74) - uTime * 0.005).r
+        ) - 0.5;
+        q.xz += curl * (1.0 - hf) * 0.9;
+
+        float detail = texture(uDetail, q + uTime * 0.003).r;
+        // Wispy erosion at the bottom, billowy at the top.
+        float modifier = mix(detail, 1.0 - detail, clamp(hf * 2.0, 0.0, 1.0));
+        raw = remapClamped(raw, modifier * 0.42, 1.0, 0.0, 1.0);
+
         float th = uThreshold + (1.0 - uLife) * 0.10;
-        float env = uLife * uLife * (3.0 - 2.0 * uLife);
         // The long ramp leaves a misty translucent halo around the
         // dense core instead of a hard boundary.
-        return smoothstep(th, th + uRange, raw) * env;
+        return smoothstep(th, th + uRange, raw) * lifeEnv();
       }
 
       void main() {
@@ -200,9 +312,9 @@ function makeCloudMaterial(
           float d = sampleDensity(p);
           if (d > 0.001) {
             // Three shadow taps toward the sun: self-shadowing.
-            float sh = sampleDensity(p + vLocalSun * 0.08)
-                     + sampleDensity(p + vLocalSun * 0.18) * 0.7
-                     + sampleDensity(p + vLocalSun * 0.34) * 0.4;
+            float sh = sampleDensityCheap(p + vLocalSun * 0.08)
+                     + sampleDensityCheap(p + vLocalSun * 0.18) * 0.7
+                     + sampleDensityCheap(p + vLocalSun * 0.34) * 0.4;
             // Beer-Lambert extinction sculpts the lobes; the powder term
             // darkens the crevices between them, which is what makes
             // cumulus read as fluffy cauliflower.
@@ -250,6 +362,7 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
     makeCloudTexture(37.4),
     makeCloudTexture(81.2),
   ];
+  const detailTexture = makeDetailTexture();
   const geometry = new BoxGeometry(1, 1, 1);
 
   interface Drift {
@@ -282,6 +395,7 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
     const material = makeCloudMaterial(
       uniforms,
       textures[i % textures.length],
+      detailTexture,
       randRange(rng, 0.24, 0.33),
     );
     const mesh = new Mesh(geometry, material);

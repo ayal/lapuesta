@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="description" content="la puesta — an endless stylized sunset on a tiny planet" />
+    <title>la puesta</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: #0b0d24;
+        height: 100%;
+        font-family: Georgia, "Times New Roman", serif;
+      }
+      canvas {
+        display: block;
+      }
+      #title {
+        position: fixed;
+        top: 28px;
+        left: 32px;
+        color: #f5e3d0;
+        opacity: 0.85;
+        font-style: italic;
+        font-size: 22px;
+        letter-spacing: 0.35em;
+        pointer-events: none;
+        user-select: none;
+        text-shadow: 0 0 18px rgba(255, 150, 90, 0.35);
+      }
+      #hint {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: #cdb9c9;
+        opacity: 0;
+        font-style: italic;
+        font-size: 13px;
+        letter-spacing: 0.12em;
+        pointer-events: none;
+        user-select: none;
+        transition: opacity 1.6s ease;
+        text-align: center;
+      }
+      #hint.visible {
+        opacity: 0.65;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="title">la puesta</div>
+    <div id="hint">drag to wander &mdash; be still and the tour resumes</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

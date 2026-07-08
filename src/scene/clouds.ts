@@ -19,33 +19,61 @@ import type { SceneUniforms } from "../uniforms";
 const rng = mulberry32(7101988);
 
 /**
- * A 3D fbm density field with radial falloff — the recipe from the
- * official three.js volume-cloud example. Each cloud raymarches this.
+ * A cumulus density field: a cluster of overlapping soft spheres
+ * (metaballs) gives the cauliflower lobes real clouds have, and fbm
+ * noise modulates them into billows. Each cloud raymarches this.
  */
 function makeCloudTexture(seed: number): Data3DTexture {
-  const size = 96;
+  const size = 88;
   const data = new Uint8Array(size * size * size);
   const perlin = new ImprovedNoise();
-  const s = 0.07;
-  const half = size / 2;
+  const rngT = mulberry32(Math.floor(seed * 1000) + 11);
+  const s = 0.075;
 
+  // Puff cluster: one fat base lobe, smaller lobes piled on and around.
+  interface Puff { x: number; y: number; z: number; r: number }
+  const puffs: Puff[] = [{ x: 0, y: -0.08, z: 0, r: 0.5 }];
+  const puffCount = 12;
+  for (let p = 0; p < puffCount; p++) {
+    const up = rngT(); // higher lobes are smaller
+    puffs.push({
+      x: (rngT() * 2 - 1) * 0.55,
+      y: -0.2 + up * 0.62,
+      z: (rngT() * 2 - 1) * 0.42,
+      r: (0.34 - up * 0.14) * (0.7 + rngT() * 0.6),
+    });
+  }
+
+  const half = size / 2;
   let i = 0;
   for (let z = 0; z < size; z++) {
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        const dx = (x - half) / half;
-        const dy = (y - half) / half;
-        const dz = (z - half) / half;
-        const d = 1 - Math.sqrt(dx * dx + dy * dy + dz * dz);
-        const falloff = Math.max(0, d) ** 2;
+        const px = (x - half) / half;
+        const py = (y - half) / half;
+        const pz = (z - half) / half;
 
+        // Soft union of the lobes.
+        let cover = 1;
+        for (const p of puffs) {
+          const dx = px - p.x;
+          const dy = py - p.y;
+          const dz = pz - p.z;
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz) / p.r;
+          const c = d >= 1 ? 0 : d <= 0.45 ? 1 : 1 - (d - 0.45) / 0.55;
+          cover *= 1 - c * c * (3 - 2 * c);
+        }
+        let density = 1 - cover;
+
+        // Billow modulation + flattened base.
         const n =
-          perlin.noise(x * s + seed, y * s * 1.4, z * s) +
-          0.5 * perlin.noise(x * s * 2.2, y * s * 2.2 + seed, z * s * 2.2) +
-          0.25 * perlin.noise(x * s * 4.4 + seed, y * s * 4.4, z * s * 4.4) +
-          0.125 * perlin.noise(x * s * 8.8, y * s * 8.8, z * s * 8.8 + seed);
+          perlin.noise(x * s + seed, y * s * 1.3, z * s) +
+          0.5 * perlin.noise(x * s * 2.3, y * s * 2.3 + seed, z * s * 2.3) +
+          0.25 * perlin.noise(x * s * 4.8 + seed, y * s * 4.8, z * s * 4.8);
+        density *= 0.72 + 0.5 * n;
+        if (py < -0.45) density *= Math.max(0, 1 - (-0.45 - py) * 2.4);
 
-        data[i] = Math.min(255, Math.max(0, (110 + 140 * n) * falloff * 1.6));
+        data[i] = Math.min(255, Math.max(0, density * 285));
         i++;
       }
     }
@@ -73,8 +101,8 @@ function makeCloudMaterial(
       uTime: uniforms.uTime,
       ...paletteUniforms(uniforms),
       uThreshold: { value: threshold },
-      uRange: { value: 0.26 },
-      uOpacity: { value: 18.0 },
+      uRange: { value: 0.2 },
+      uOpacity: { value: 22.0 },
       uLife: { value: 1.0 },
     },
     transparent: true,
@@ -140,8 +168,8 @@ function makeCloudMaterial(
         float raw = texture(uMap, p + 0.5).r;
         // Erode the fringe with finer noise that slowly drifts, so the
         // feathery edges seethe and morph continuously.
-        float wisp = texture(uMap, p * 2.7 + 0.5 + uTime * 0.008).r;
-        raw -= wisp * 0.18 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
+        float wisp = texture(uMap, p * 3.3 + 0.5 + uTime * 0.006).r;
+        raw -= wisp * 0.13 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
         // Life cycle: mostly a gentle density fade with a slight
         // threshold drift, so forming/dissolving is soft, not choppy.
         float th = uThreshold + (1.0 - uLife) * 0.10;
@@ -167,10 +195,15 @@ function makeCloudMaterial(
         for (int i = 0; i < STEPS; i++) {
           float d = sampleDensity(p);
           if (d > 0.001) {
-            // Two shadow taps toward the sun: self-shadowing.
-            float sh = sampleDensity(p + vLocalSun * 0.10)
-                     + sampleDensity(p + vLocalSun * 0.24) * 0.7;
-            float light = exp(-sh * 3.2);
+            // Three shadow taps toward the sun: self-shadowing.
+            float sh = sampleDensity(p + vLocalSun * 0.08)
+                     + sampleDensity(p + vLocalSun * 0.18) * 0.7
+                     + sampleDensity(p + vLocalSun * 0.34) * 0.4;
+            // Beer-Lambert extinction sculpts the lobes; the powder term
+            // darkens the crevices between them, which is what makes
+            // cumulus read as fluffy cauliflower.
+            float beer = exp(-sh * 4.2);
+            float powder = 1.0 - exp(-(sh + d) * 2.6);
 
             // Sun angle at this exact sample, so one cloud can run from
             // fire-lit to dusk-grey across its own length.
@@ -178,10 +211,11 @@ function makeCloudMaterial(
             float ndl = dot(normalize(worldP), normalize(uSunDir));
             // Behind the terminator the planet shadows the cloud.
             float vis = smoothstep(-0.08, 0.06, ndl);
-            vec3 sunCol = sunTint(ndl) * 1.0 * vis;
+            vec3 sunCol = sunTint(ndl) * vis;
             vec3 skyAmb = duskRamp(ndl) * 0.4 + vec3(0.015, 0.018, 0.05);
 
-            vec3 c = skyAmb + sunCol * light * phase;
+            vec3 c = skyAmb * (0.55 + 0.45 * powder)
+                   + sunCol * beer * powder * 1.45 * phase;
 
             float a = d * uOpacity * stepSize;
             a = 1.0 - exp(-a);

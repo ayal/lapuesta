@@ -94,11 +94,12 @@ export function createSun(): Sun {
         pickOrbit(day, targetOrbit);
         if (firstCall) orbit.copy(targetOrbit);
       }
-      orbit.slerp(targetOrbit, 1 - Math.exp(-dt * 0.5));
+      // Ease toward the new orbit very gently — spread across most of a
+      // day, so the sun's path bends imperceptibly rather than swerving.
+      orbit.slerp(targetOrbit, 1 - Math.exp(-dt * 0.045));
 
-      // The orbit plane also precesses continuously, so within a single
-      // day the sun's path visibly wanders around the planet.
-      precess.setFromAxisAngle(Y_AXIS, dt * 0.12);
+      // A slow steady precession keeps successive laps from repeating.
+      precess.setFromAxisAngle(Y_AXIS, dt * 0.035);
       orbit.premultiply(precess);
       targetOrbit.premultiply(precess);
 

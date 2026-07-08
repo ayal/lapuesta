@@ -26,7 +26,7 @@ function makeCloudTexture(seed: number): Data3DTexture {
   const size = 96;
   const data = new Uint8Array(size * size * size);
   const perlin = new ImprovedNoise();
-  const s = 0.09;
+  const s = 0.07;
   const half = size / 2;
 
   let i = 0;
@@ -70,10 +70,11 @@ function makeCloudMaterial(
     uniforms: {
       uMap: { value: texture },
       uSunDir: uniforms.uSunDir,
+      uTime: uniforms.uTime,
       ...paletteUniforms(uniforms),
       uThreshold: { value: threshold },
-      uRange: { value: 0.22 },
-      uOpacity: { value: 16.0 },
+      uRange: { value: 0.26 },
+      uOpacity: { value: 18.0 },
       uLife: { value: 1.0 },
     },
     transparent: true,
@@ -116,6 +117,7 @@ function makeCloudMaterial(
       uniform float uRange;
       uniform float uOpacity;
       uniform float uLife;
+      uniform float uTime;
       uniform mat4 modelMatrix;
       uniform vec3 uSunDir;
 
@@ -136,14 +138,15 @@ function makeCloudMaterial(
 
       float sampleDensity(vec3 p) {
         float raw = texture(uMap, p + 0.5).r;
-        // Erode the fringe with finer noise: feathery, smoky edges
-        // around a dense core.
-        float wisp = texture(uMap, p * 2.7 + 0.5).r;
-        raw -= wisp * 0.25 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
-        // Life cycle: a rising threshold dissolves the cloud from its
-        // wisps inward; a falling one condenses it out of thin air.
-        float th = uThreshold + (1.0 - uLife) * 0.32;
-        return smoothstep(th, th + uRange, raw);
+        // Erode the fringe with finer noise that slowly drifts, so the
+        // feathery edges seethe and morph continuously.
+        float wisp = texture(uMap, p * 2.7 + 0.5 + uTime * 0.008).r;
+        raw -= wisp * 0.18 * (1.0 - smoothstep(uThreshold, uThreshold + 0.25, raw));
+        // Life cycle: mostly a gentle density fade with a slight
+        // threshold drift, so forming/dissolving is soft, not choppy.
+        float th = uThreshold + (1.0 - uLife) * 0.10;
+        float env = uLife * uLife * (3.0 - 2.0 * uLife);
+        return smoothstep(th, th + uRange, raw) * env;
       }
 
       void main() {
@@ -282,7 +285,7 @@ export function createClouds(uniforms: SceneUniforms, count = 42): CloudBank {
         }
         const t = Math.max(0, age) / d.lifetime;
         const env =
-          Math.min(1, t / 0.18) * (1 - Math.max(0, (t - 0.78) / 0.22));
+          Math.min(1, t / 0.3) * (1 - Math.max(0, (t - 0.7) / 0.3));
         d.material.uniforms.uLife.value = env;
         d.mesh.visible = env > 0.015;
       }

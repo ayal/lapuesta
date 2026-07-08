@@ -22,12 +22,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      # npm ci reproducibly dies with "Exit handler never called!" on the
-      # hosted runners — npm install survives; verify the install landed.
-      - run: npm install --no-audit --no-fund || npm install --no-audit --no-fund
+      # npm (ci and install alike) reproducibly dies with "Exit handler
+      # never called!" on the hosted runners — pnpm doesn't.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - run: pnpm install --no-frozen-lockfile
       - run: test -d node_modules/three
-      - run: npm run build
+      - run: pnpm run build
       - uses: actions/configure-pages@v4
         with:
           enablement: true
